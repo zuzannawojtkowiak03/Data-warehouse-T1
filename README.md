@@ -2,6 +2,7 @@
 Data Engineering and Data Governance - Tutorial 5, Period 4, Year 3.
 Add the data warehouse image from Draw.io. Add the naming convention.
 
+Data Warehouse: <img width="700" height="522" alt="Screenshot 2026-02-26 at 13 05 19" src="https://github.com/user-attachments/assets/eb5e1028-de96-4a57-864a-33f987acc84f" /> (Also in Notion.so)
+
 Notion.so: https://www.notion.so/Data-Warehouses-T1-31266b4ddccb809697eef8f0c69e7542?source=copy_link
 Naming convention: snake_convention
-Data Warehouse: <img width="700" height="522" alt="Screenshot 2026-02-26 at 13 05 19" src="https://github.com/user-attachments/assets/eb5e1028-de96-4a57-864a-33f987acc84f" /> (Also in Notion.so)
