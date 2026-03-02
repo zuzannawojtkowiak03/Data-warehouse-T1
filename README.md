@@ -1,7 +1,7 @@
 # Data-warehouse-T1
 Data Engineering and Data Governance - Period 4, Year 3. <br>
 
-Tutorial 5:
+Tutorial 5: <br>
 Add the data warehouse image from Draw.io. Add the naming convention. <br>
 
 Data Warehouse: <br> <img width="700" height="522" alt="Screenshot 2026-02-26 at 13 05 19" src="https://github.com/user-attachments/assets/eb5e1028-de96-4a57-864a-33f987acc84f" /> <br> (Also in Notion.so) <br>
