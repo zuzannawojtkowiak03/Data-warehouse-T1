@@ -5,8 +5,8 @@ Tutorial 6: <br>
 Connect PostgreSQL and Python and use Python to upload the CSV data into ingestion layer. Validate the data and test it in PostgreSQL through SQL queries in PostgreSQL. <br>
 Code in data-inegestion/code. <br>
 Adding here an example of an query in PostgreSQL to show that it works :) <br.
-<img width="1464" height="883" alt="Screenshot 2026-03-03 at 01 05 06" src="https://github.com/user-attachments/assets/ef6b7a06-33d9-4d81-9647-4176058cd19b" /> <br>
-
+<img width="1512" height="982" alt="Screenshot 2026-03-03 at 01 06 36" src="https://github.com/user-attachments/assets/a7ec09e6-70c7-4b93-8fcd-62fa03d0929b" />
+<br>
 
 Tutorial 5: <br>
 Add the data warehouse image from Draw.io. Add the naming convention. <br>
