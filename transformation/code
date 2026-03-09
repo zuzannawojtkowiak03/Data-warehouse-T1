@@ -1,1 +1,149 @@
+import psycopg2
+import pandas as pd
+import io
 
+DB_NAME = "data_warehouse"
+SCHEMA = "ingestion"
+
+TABLES = [
+    "cust_info",
+    "cust_az12",
+    "loc_a101",
+    "prd_info",
+    "px_cat_g1v2",
+    "sales_details"
+]
+
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+dataframes = {}
+
+for table in TABLES:
+    query = f'SELECT * FROM "{SCHEMA}"."{table}";'
+    df = pd.read_sql(query, conn)
+    dataframes[table] = df
+    print(f"Loaded {table}: {df.shape}")
+
+conn.close()
+
+## Cleaning cust_info
+
+cust_info_clean = dataframes["cust_info"].copy()
+
+# 1. Replace empty strings / spaces-only values with NA
+cust_info_clean = cust_info_clean.replace(r'^\s*$', pd.NA, regex=True)
+
+# 2. Trim spaces in text columns
+cust_info_clean["cst_firstname"] = cust_info_clean["cst_firstname"].str.strip()
+cust_info_clean["cst_lastname"] = cust_info_clean["cst_lastname"].str.strip()
+cust_info_clean["cst_key"] = cust_info_clean["cst_key"].str.strip()
+
+# 3. Find rows with missing ID or key
+invalid_id_rows = cust_info_clean[cust_info_clean["cst_id"].isna()]
+invalid_key_rows = cust_info_clean[cust_info_clean["cst_key"].isna()]
+
+# 4. Keep only rows where ID and key are present
+cust_info_clean = cust_info_clean[
+    cust_info_clean["cst_id"].notna() &
+    cust_info_clean["cst_key"].notna()
+].copy()
+
+# 5. Find duplicate cst_id rows
+duplicate_id_rows = cust_info_clean[
+    cust_info_clean["cst_id"].duplicated(keep=False)
+]
+
+# 6. Check whether cst_key matches AW000 + cst_id
+expected_key = "AW000" + cust_info_clean["cst_id"].astype("string")
+invalid_key_match_rows = cust_info_clean[
+    cust_info_clean["cst_key"] != expected_key
+]
+
+# 7. Keep only rows with valid key
+cust_info_clean = cust_info_clean[
+    cust_info_clean["cst_key"] == expected_key
+].copy()
+
+# 8. Remove duplicate customer IDs
+cust_info_clean = cust_info_clean.drop_duplicates(subset=["cst_id"], keep="first")
+
+# 9. Replace marital status and gender codes
+marital_map = {"M": "Married", "S": "Single"}
+gender_map = {"M": "Male", "F": "Female"}
+
+cust_info_clean["cst_marital_status"] = cust_info_clean["cst_marital_status"].replace(marital_map)
+cust_info_clean["cst_gndr"] = cust_info_clean["cst_gndr"].replace(gender_map)
+
+# 10. Convert create date to datetime for validation
+cust_info_clean["cst_create_date_converted"] = pd.to_datetime(
+    cust_info_clean["cst_create_date"],
+    errors="coerce"
+)
+
+# 11. Find future dates
+future_date_rows = cust_info_clean[
+    cust_info_clean["cst_create_date_converted"].notna() &
+    (cust_info_clean["cst_create_date_converted"].dt.date > pd.Timestamp.today().date())
+]
+
+# 12. Preview version with NA visible
+cust_info_preview = cust_info_clean.fillna("NA")
+
+# 13. Drop helper column before saving
+cust_info_to_save = cust_info_clean.drop(
+    columns=["cst_create_date_converted"],
+    errors="ignore"
+).copy()
+
+cust_info_to_save = cust_info_to_save.fillna("NA")
+
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+cur = conn.cursor()
+
+# Create clean schema
+cur.execute('CREATE SCHEMA IF NOT EXISTS "transformation";')
+
+# Drop table if exists
+cur.execute('DROP TABLE IF EXISTS "transformation"."cust_info";')
+
+# Create table with all TEXT columns
+columns = list(cust_info_to_save.columns)
+columns_sql = ", ".join([f'"{col}" TEXT' for col in columns])
+
+cur.execute(f'''
+    CREATE TABLE "transformation"."cust_info" (
+        {columns_sql}
+    );
+''')
+conn.commit()
+
+# Write dataframe to CSV buffer
+buffer = io.StringIO()
+cust_info_to_save.to_csv(buffer, index=False, header=False, na_rep="")
+buffer.seek(0)
+
+# Copy data into PostgreSQL
+cur.copy_expert(
+    sql=f'''
+        COPY "transformation"."cust_info" ({", ".join([f'"{col}"' for col in columns])})
+        FROM STDIN WITH CSV
+    ''',
+    file=buffer
+)
+
+conn.commit()
+cur.close()
+conn.close()
