@@ -1,6 +1,13 @@
 # Data-warehouse-T1
 Data Engineering and Data Governance - Period 4, Year 3. <br>
 
+
+Tutorial 7: <br>
+Code in data-transformation/code. <br>
+I added screenshots showing the cust_info table before and after cleaning process in tranformation process.
+<img width="1298" height="739" alt="Screenshot 2026-03-09 at 17 47 59" src="https://github.com/user-attachments/assets/5fb5128c-b649-4179-a13d-fb635b66400f" /> <br>
+<img width="1293" height="790" alt="Screenshot 2026-03-09 at 17 46 53" src="https://github.com/user-attachments/assets/28e38ac9-d31c-4ef8-ad11-10f9021f2d22" /> <br>
+
 Tutorial 6: <br>
 Connect PostgreSQL and Python and use Python to upload the CSV data into ingestion layer. Validate the data and test it in PostgreSQL through SQL queries in PostgreSQL. <br>
 Code in data-inegestion/code. <br>
