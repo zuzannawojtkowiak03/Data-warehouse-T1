@@ -1,0 +1,203 @@
+import psycopg2
+import pandas as pd
+import io
+
+DB_NAME = "data_warehouse"
+SCHEMA = "ingestion"
+
+TABLES = [
+    "cust_info",
+    "cust_az12",
+    "loc_a101",
+    "prd_info",
+    "px_cat_g1v2",
+    "sales_details"
+]
+
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+dataframes = {}
+
+for table in TABLES:
+    query = f'SELECT * FROM "{SCHEMA}"."{table}";'
+    df = pd.read_sql(query, conn)
+    dataframes[table] = df
+    print(f"Loaded {table}: {df.shape}")
+
+conn.close()
+# 2. CLEAN prd_info
+
+prd_info_clean = dataframes["prd_info"].copy()
+
+# Trim spaces in all text columns
+for col in prd_info_clean.columns:
+    if prd_info_clean[col].dtype == "object" or str(prd_info_clean[col].dtype) == "string":
+        prd_info_clean[col] = prd_info_clean[col].astype("string").str.strip()
+
+# Clean product name
+prd_info_clean["prd_nm"] = prd_info_clean["prd_nm"].astype("string").str.strip()
+
+# 3. CLEAN prd_cost
+
+# Convert prd_cost to numeric
+prd_info_clean["prd_cost"] = pd.to_numeric(
+    prd_info_clean["prd_cost"],
+    errors="coerce"
+)
+
+# Replace negative prices with 0
+prd_info_clean.loc[prd_info_clean["prd_cost"] < 0, "prd_cost"] = 0
+
+# Replace missing prices with 0 and keep integer format
+prd_info_clean["prd_cost"] = prd_info_clean["prd_cost"].fillna(0).astype("Int64")
+
+# 4. STANDARDIZE prd_line
+
+# Convert short codes into full names
+prd_info_clean["prd_line"] = (
+    prd_info_clean["prd_line"]
+    .astype("string")
+    .str.strip()
+    .str.upper()
+    .str[0]
+)
+
+line_map = {
+    "M": "Mountain",
+    "R": "Road",
+    "S": "Sport",
+    "T": "Touring"
+}
+
+prd_info_clean["prd_line"] = prd_info_clean["prd_line"].map(line_map).fillna("Other")
+
+# 5. CREATE prd_category FROM prd_key
+
+# Take the first 5 characters of prd_key and replace "-" with "_"
+# Example: AC-BC-BC-M005 -> AC_BC
+prd_info_clean["prd_category"] = (
+    prd_info_clean["prd_key"]
+    .astype("string")
+    .str.strip()
+    .str[:5]
+    .str.replace("-", "_", regex=False)
+)
+
+# Remove the first category part from prd_key
+# Example: AC-BC-BC-M005 -> BC-M005
+prd_info_clean["prd_key"] = (
+    prd_info_clean["prd_key"]
+    .astype("string")
+    .str.strip()
+    .str[6:]
+)
+
+# 6. FIX DATES
+
+# Save original order before temporary sorting
+prd_info_clean["original_order"] = range(len(prd_info_clean))
+
+# Convert date columns to datetime
+prd_info_clean["prd_start_dt"] = pd.to_datetime(
+    prd_info_clean["prd_start_dt"],
+    errors="coerce"
+)
+
+prd_info_clean["prd_end_dt"] = pd.to_datetime(
+    prd_info_clean["prd_end_dt"],
+    errors="coerce"
+)
+
+# Temporarily sort by product key and start date
+# This allows us to update end dates in the correct sequence
+prd_info_clean = prd_info_clean.sort_values(by=["prd_key", "prd_start_dt"]).copy()
+
+# Get the next start date for the same product key
+prd_info_clean["next_start_dt"] = (
+    prd_info_clean.groupby("prd_key")["prd_start_dt"].shift(-1)
+)
+
+# For older product versions:
+# set end date to one day before the next version starts
+prd_info_clean.loc[
+    prd_info_clean["next_start_dt"].notna(),
+    "prd_end_dt"
+] = prd_info_clean["next_start_dt"] - pd.Timedelta(days=1)
+
+# If end date becomes earlier than start date, leave it empty
+prd_info_clean.loc[
+    (prd_info_clean["prd_end_dt"].notna()) &
+    (prd_info_clean["prd_start_dt"].notna()) &
+    (prd_info_clean["prd_end_dt"] < prd_info_clean["prd_start_dt"]),
+    "prd_end_dt"
+] = pd.NaT
+
+# Remove helper column
+prd_info_clean = prd_info_clean.drop(columns=["next_start_dt"])
+
+# Restore final order by prd_id
+prd_info_clean["prd_id_num"] = pd.to_numeric(prd_info_clean["prd_id"], errors="coerce")
+prd_info_clean = prd_info_clean.sort_values(by="prd_id_num").copy()
+prd_info_clean = prd_info_clean.drop(columns=["original_order", "prd_id_num"])
+
+# 7. PREPARE DATA FOR SAVING
+
+prd_info_to_save = prd_info_clean.copy()
+
+# Format dates as YYYY-MM-DD
+# Missing dates stay empty and will become SQL NULL
+prd_info_to_save["prd_start_dt"] = prd_info_to_save["prd_start_dt"].dt.strftime("%Y-%m-%d")
+prd_info_to_save["prd_end_dt"] = prd_info_to_save["prd_end_dt"].dt.strftime("%Y-%m-%d")
+
+# 8. SAVE CLEANED TABLE TO TRANSFORMATION LAYER
+
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+cur = conn.cursor()
+
+# Create transformation schema if it does not exist
+cur.execute('CREATE SCHEMA IF NOT EXISTS "transformation";')
+
+# Drop old version of the cleaned table
+cur.execute('DROP TABLE IF EXISTS "transformation"."prd_info";')
+
+# Create new table with all columns as TEXT
+columns = list(prd_info_to_save.columns)
+columns_sql = ", ".join([f'"{col}" TEXT' for col in columns])
+
+cur.execute(f'''
+    CREATE TABLE "transformation"."prd_info" (
+        {columns_sql}
+    );
+''')
+conn.commit()
+
+# Write dataframe into a memory buffer as CSV
+buffer = io.StringIO()
+prd_info_to_save.to_csv(buffer, index=False, header=False, na_rep="")
+buffer.seek(0)
+
+# Copy CSV data into PostgreSQL
+cur.copy_expert(
+    sql=f'''
+        COPY "transformation"."prd_info" ({", ".join([f'"{col}"' for col in columns])})
+        FROM STDIN WITH CSV
+    ''',
+    file=buffer
+)
+
+conn.commit()
+cur.close()
+conn.close()
