@@ -1,0 +1,79 @@
+import psycopg2
+import pandas as pd
+import io
+
+DB_NAME = "data_warehouse"
+SOURCE_SCHEMA = "ingestion"
+TARGET_SCHEMA = "transformation"
+TABLE_NAME = "loc_a101"
+
+# connect + load data
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+loc_a101 = pd.read_sql(f'SELECT * FROM "{SOURCE_SCHEMA}"."{TABLE_NAME}";', conn)
+conn.close()
+
+loc_clean = loc_a101.copy()
+
+# delete "-" from CID
+loc_clean["CID"] = loc_clean["CID"].astype("string").str.strip().str.replace("-", "", regex=False)
+
+# remove null CID
+loc_clean = loc_clean.dropna(subset=["CID"])
+
+# change country codes to full names
+loc_clean["CNTRY"] = loc_clean["CNTRY"].astype("string").str.strip()
+loc_clean["CNTRY"] = loc_clean["CNTRY"].replace({
+    "US": "United States",
+    "USA": "United States",
+    "DE": "Germany"
+})
+
+# missing country -> NA
+loc_clean["CNTRY"] = loc_clean["CNTRY"].fillna("NA")
+
+# connect + save
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+cur = conn.cursor()
+
+# create schema/table
+cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{TARGET_SCHEMA}";')
+cur.execute(f'DROP TABLE IF EXISTS "{TARGET_SCHEMA}"."{TABLE_NAME}";')
+
+cur.execute(f'''
+    CREATE TABLE "{TARGET_SCHEMA}"."{TABLE_NAME}" (
+        "CID" TEXT,
+        "CNTRY" TEXT
+    );
+''')
+conn.commit()
+
+# insert data
+buffer = io.StringIO()
+loc_clean[["CID", "CNTRY"]].to_csv(buffer, index=False, header=False)
+buffer.seek(0)
+
+cur.copy_expert(
+    sql=f'''
+        COPY "{TARGET_SCHEMA}"."{TABLE_NAME}" ("CID", "CNTRY")
+        FROM STDIN WITH CSV
+    ''',
+    file=buffer
+)
+
+conn.commit()
+cur.close()
+conn.close()
