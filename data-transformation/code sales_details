@@ -1,5 +1,22 @@
-conn = psycopg2.connect(...)
-sales_details = pd.read_sql(...)
+import psycopg2
+import pandas as pd
+import io
+
+DB_NAME = "data_warehouse"
+SOURCE_SCHEMA = "ingestion"
+TARGET_SCHEMA = "transformation"
+TABLE_NAME = "sales_details"
+
+# connect + load data
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+sales_details = pd.read_sql(f'SELECT * FROM "{SOURCE_SCHEMA}"."{TABLE_NAME}";', conn)
 conn.close()
 
 sales_clean = sales_details.copy()
@@ -7,7 +24,7 @@ sales_clean = sales_details.copy()
 # remove null product key
 sales_clean = sales_clean.dropna(subset=["sls_prd_key"])
 
-# remove duplicate (order + product)
+# remove duplicate order-product pairs
 sales_clean = sales_clean.drop_duplicates(subset=["sls_ord_num", "sls_prd_key"])
 
 # convert dates
@@ -15,7 +32,7 @@ sales_clean["order_date"] = pd.to_datetime(sales_clean["sls_order_dt"], format="
 sales_clean["ship_date"] = pd.to_datetime(sales_clean["sls_ship_dt"], format="%Y%m%d", errors="coerce")
 sales_clean["due_date"] = pd.to_datetime(sales_clean["sls_due_dt"], format="%Y%m%d", errors="coerce")
 
-# fix missing order_date -> due_date - 1
+# fix missing order date -> due date - 1
 mask = sales_clean["order_date"].isna() & sales_clean["due_date"].notna()
 sales_clean.loc[mask, "order_date"] = sales_clean.loc[mask, "due_date"] - pd.Timedelta(days=1)
 
@@ -45,17 +62,44 @@ sales_clean["sls_due_dt"] = sales_clean["due_date"].dt.strftime("%Y-%m-%d")
 # drop helper columns
 sales_clean = sales_clean.drop(columns=["order_date", "ship_date", "due_date"])
 
-conn = psycopg2.connect(...)
+# connect + save
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
 cur = conn.cursor()
 
-cur.execute(...)
-cur.execute(...)
+# create schema/table
+cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{TARGET_SCHEMA}";')
+cur.execute(f'DROP TABLE IF EXISTS "{TARGET_SCHEMA}"."{TABLE_NAME}";')
 
+columns = list(sales_clean.columns)
+columns_sql = ", ".join([f'"{col}" TEXT' for col in columns])
+
+cur.execute(f'''
+    CREATE TABLE "{TARGET_SCHEMA}"."{TABLE_NAME}" (
+        {columns_sql}
+    );
+''')
+conn.commit()
+
+# insert data
 buffer = io.StringIO()
 sales_clean.to_csv(buffer, index=False, header=False)
 buffer.seek(0)
 
-cur.copy_expert(...)
+cur.copy_expert(
+    sql=f'''
+        COPY "{TARGET_SCHEMA}"."{TABLE_NAME}"
+        ({", ".join([f'"{col}"' for col in columns])})
+        FROM STDIN WITH CSV
+    ''',
+    file=buffer
+)
 
 conn.commit()
 cur.close()
