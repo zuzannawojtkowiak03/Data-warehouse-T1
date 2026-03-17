@@ -1,0 +1,62 @@
+conn = psycopg2.connect(...)
+sales_details = pd.read_sql(...)
+conn.close()
+
+sales_clean = sales_details.copy()
+
+# remove null product key
+sales_clean = sales_clean.dropna(subset=["sls_prd_key"])
+
+# remove duplicate (order + product)
+sales_clean = sales_clean.drop_duplicates(subset=["sls_ord_num", "sls_prd_key"])
+
+# convert dates
+sales_clean["order_date"] = pd.to_datetime(sales_clean["sls_order_dt"], format="%Y%m%d", errors="coerce")
+sales_clean["ship_date"] = pd.to_datetime(sales_clean["sls_ship_dt"], format="%Y%m%d", errors="coerce")
+sales_clean["due_date"] = pd.to_datetime(sales_clean["sls_due_dt"], format="%Y%m%d", errors="coerce")
+
+# fix missing order_date -> due_date - 1
+mask = sales_clean["order_date"].isna() & sales_clean["due_date"].notna()
+sales_clean.loc[mask, "order_date"] = sales_clean.loc[mask, "due_date"] - pd.Timedelta(days=1)
+
+# remove invalid dates
+sales_clean = sales_clean.dropna(subset=["order_date", "ship_date", "due_date"])
+
+# keep correct date order
+sales_clean = sales_clean[sales_clean["order_date"] <= sales_clean["due_date"]]
+
+# convert numeric
+sales_clean["sls_price"] = pd.to_numeric(sales_clean["sls_price"], errors="coerce")
+sales_clean["sls_quantity"] = pd.to_numeric(sales_clean["sls_quantity"], errors="coerce")
+
+# remove null / zero quantity or price
+sales_clean = sales_clean.dropna(subset=["sls_price", "sls_quantity"])
+sales_clean = sales_clean[sales_clean["sls_quantity"] != 0]
+
+# fix price and sales
+sales_clean["sls_price"] = sales_clean["sls_price"].abs()
+sales_clean["sls_sales"] = sales_clean["sls_quantity"] * sales_clean["sls_price"]
+
+# convert dates back to string
+sales_clean["sls_order_dt"] = sales_clean["order_date"].dt.strftime("%Y-%m-%d")
+sales_clean["sls_ship_dt"] = sales_clean["ship_date"].dt.strftime("%Y-%m-%d")
+sales_clean["sls_due_dt"] = sales_clean["due_date"].dt.strftime("%Y-%m-%d")
+
+# drop helper columns
+sales_clean = sales_clean.drop(columns=["order_date", "ship_date", "due_date"])
+
+conn = psycopg2.connect(...)
+cur = conn.cursor()
+
+cur.execute(...)
+cur.execute(...)
+
+buffer = io.StringIO()
+sales_clean.to_csv(buffer, index=False, header=False)
+buffer.seek(0)
+
+cur.copy_expert(...)
+
+conn.commit()
+cur.close()
+conn.close()
