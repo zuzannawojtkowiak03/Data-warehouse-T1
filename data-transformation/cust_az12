@@ -1,0 +1,81 @@
+import psycopg2
+import pandas as pd
+import io
+
+DB_NAME = "data_warehouse"
+SOURCE_SCHEMA = "ingestion"
+TARGET_SCHEMA = "transformation"
+TABLE_NAME = "cust_az12"
+
+# connect + load data
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+cust_az12 = pd.read_sql(f'SELECT * FROM "{SOURCE_SCHEMA}"."{TABLE_NAME}";', conn)
+conn.close()
+
+cust_clean = cust_az12.copy()
+
+# remove NAS from beginning of CID
+cust_clean["CID"] = cust_clean["CID"].astype("string").str.replace("^NAS", "", regex=True)
+
+# clean gender
+cust_clean["GEN"] = cust_clean["GEN"].astype("string").str.strip()
+cust_clean["GEN"] = cust_clean["GEN"].replace({
+    "M": "Male",
+    "F": "Female"
+})
+cust_clean.loc[~cust_clean["GEN"].isin(["Male", "Female"]), "GEN"] = pd.NA
+
+# fix birthday
+cust_clean["BDATE"] = pd.to_datetime(cust_clean["BDATE"], errors="coerce")
+today = pd.Timestamp.today()
+cust_clean.loc[cust_clean["BDATE"] > today, "BDATE"] = pd.NaT
+
+# connect + save
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+cur = conn.cursor()
+
+# create schema/table
+cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{TARGET_SCHEMA}";')
+cur.execute(f'DROP TABLE IF EXISTS "{TARGET_SCHEMA}"."{TABLE_NAME}";')
+
+columns = list(cust_clean.columns)
+columns_sql = ", ".join([f'"{col}" TEXT' for col in columns])
+
+cur.execute(f'''
+    CREATE TABLE "{TARGET_SCHEMA}"."{TABLE_NAME}" (
+        {columns_sql}
+    );
+''')
+conn.commit()
+
+# insert data
+buffer = io.StringIO()
+cust_clean.to_csv(buffer, index=False, header=False)
+buffer.seek(0)
+
+cur.copy_expert(
+    sql=f'''
+        COPY "{TARGET_SCHEMA}"."{TABLE_NAME}"
+        ({", ".join([f'"{col}"' for col in columns])})
+        FROM STDIN WITH CSV
+    ''',
+    file=buffer
+)
+
+conn.commit()
+cur.close()
+conn.close()
