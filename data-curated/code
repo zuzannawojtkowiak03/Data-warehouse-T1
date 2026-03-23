@@ -1,0 +1,300 @@
+import psycopg2
+import pandas as pd
+import io
+
+DB_NAME = "data_warehouse"
+TRF_SCHEMA = "transformation"
+RAW_SCHEMA = "ingestion"
+TARGET_SCHEMA = "curated"
+
+# --------------------------------------------------
+# CONNECT + LOAD SOURCE TABLES
+# --------------------------------------------------
+
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+cust_info = pd.read_sql(f'SELECT * FROM "{TRF_SCHEMA}"."cust_info";', conn)
+cust_az12 = pd.read_sql(f'SELECT * FROM "{TRF_SCHEMA}"."cust_az12";', conn)
+loc_a101 = pd.read_sql(f'SELECT * FROM "{TRF_SCHEMA}"."loc_a101";', conn)
+prd_info = pd.read_sql(f'SELECT * FROM "{TRF_SCHEMA}"."prd_info";', conn)
+px_cat_g1v2 = pd.read_sql(f'SELECT * FROM "{RAW_SCHEMA}"."px_cat_g1v2";', conn)
+sales = pd.read_sql(f'SELECT * FROM "{TRF_SCHEMA}"."sales_details";', conn)
+
+conn.close()
+
+print("Source tables loaded")
+
+# --------------------------------------------------
+# NORMALIZE COLUMN NAMES
+# --------------------------------------------------
+
+cust_info.columns = cust_info.columns.str.lower()
+cust_az12.columns = cust_az12.columns.str.lower()
+loc_a101.columns = loc_a101.columns.str.lower()
+prd_info.columns = prd_info.columns.str.lower()
+px_cat_g1v2.columns = px_cat_g1v2.columns.str.lower()
+sales.columns = sales.columns.str.lower()
+
+# --------------------------------------------------
+# CUSTOMER DIMENSION
+# --------------------------------------------------
+
+df_customers = cust_info.merge(
+    cust_az12,
+    how="left",
+    left_on="cst_key",
+    right_on="cid"
+)
+
+df_customers = df_customers.merge(
+    loc_a101,
+    how="left",
+    left_on="cst_key",
+    right_on="cid"
+)
+
+dim_customers = pd.DataFrame({
+    "customer_id": df_customers["cst_id"],
+    "customer_number": df_customers["cst_key"],
+    "first_name": df_customers["cst_firstname"],
+    "last_name": df_customers["cst_lastname"],
+    "country": df_customers["cntry"],
+    "marital_status": df_customers["cst_marital_status"],
+    "gender": df_customers["cst_gndr"],
+    "birthdate": df_customers["bdate"],
+    "create_date": df_customers["cst_create_date"]
+})
+
+dim_customers["birthdate"] = pd.to_datetime(dim_customers["birthdate"], errors="coerce")
+dim_customers["create_date"] = pd.to_datetime(dim_customers["create_date"], errors="coerce")
+
+dim_customers = dim_customers.drop_duplicates()
+dim_customers = dim_customers.sort_values(by=["customer_id"]).reset_index(drop=True)
+dim_customers.insert(0, "customer_key", dim_customers.index + 1)
+
+print("dim_customers ready")
+
+# --------------------------------------------------
+# PRODUCT DIMENSION
+# --------------------------------------------------
+
+df_product = prd_info.merge(
+    px_cat_g1v2,
+    how="left",
+    left_on="prd_category",
+    right_on="id"
+)
+
+dim_product = pd.DataFrame({
+    "product_number": df_product["prd_id"],
+    "product_name": df_product["prd_nm"],
+    "cost": pd.to_numeric(df_product["prd_cost"], errors="coerce"),
+    "product_line": df_product["prd_line"],
+    "start_date": df_product["prd_start_dt"],
+    "end_date": df_product["prd_end_dt"],
+    "category_id": df_product["prd_category"],
+    "category": df_product["cat"],
+    "subcategory": df_product["subcat"],
+    "maintenance": df_product["maintenance"]
+})
+
+dim_product["start_date"] = pd.to_datetime(dim_product["start_date"], errors="coerce")
+dim_product["end_date"] = pd.to_datetime(dim_product["end_date"], errors="coerce")
+
+dim_product = dim_product.drop_duplicates()
+dim_product = dim_product.sort_values(by=["product_number"]).reset_index(drop=True)
+dim_product.insert(0, "product_key", dim_product.index + 1)
+
+print("dim_product ready")
+
+# --------------------------------------------------
+# FACT SALES
+# --------------------------------------------------
+
+prd_info_current = prd_info[prd_info["prd_end_dt"].isna() | (prd_info["prd_end_dt"] == "")].copy()
+
+prd_info_current["full_prd_key"] = (
+    prd_info_current["prd_category"].astype("string").str.replace("_", "-", regex=False)
+    + "-"
+    + prd_info_current["prd_key"].astype("string")
+)
+
+fact_df = sales.merge(
+    prd_info_current[["full_prd_key", "prd_id"]],
+    how="left",
+    left_on="sls_prd_key",
+    right_on="full_prd_key"
+)
+
+fact_df = fact_df.merge(
+    dim_customers[["customer_key", "customer_id"]],
+    how="left",
+    left_on="sls_cust_id",
+    right_on="customer_id"
+)
+
+fact_df = fact_df.merge(
+    dim_product[["product_key", "product_number"]],
+    how="left",
+    left_on="prd_id",
+    right_on="product_number"
+)
+
+fact_sales = pd.DataFrame({
+    "order_number": fact_df["sls_ord_num"],
+    "product_key": fact_df["product_key"],
+    "customer_key": fact_df["customer_key"],
+    "order_date": fact_df["sls_order_dt"],
+    "ship_date": fact_df["sls_ship_dt"],
+    "due_date": fact_df["sls_due_dt"],
+    "sales_amount": pd.to_numeric(fact_df["sls_sales"], errors="coerce"),
+    "quantity": pd.to_numeric(fact_df["sls_quantity"], errors="coerce"),
+    "price": pd.to_numeric(fact_df["sls_price"], errors="coerce")
+})
+
+fact_sales["order_date"] = pd.to_datetime(fact_sales["order_date"], errors="coerce")
+fact_sales["ship_date"] = pd.to_datetime(fact_sales["ship_date"], errors="coerce")
+fact_sales["due_date"] = pd.to_datetime(fact_sales["due_date"], errors="coerce")
+
+print("fact_sales ready")
+
+# --------------------------------------------------
+# SAVE TO CURATED LAYER
+# --------------------------------------------------
+
+conn = psycopg2.connect(
+    host="127.0.0.1",
+    port="5432",
+    database=DB_NAME,
+    user="postgres",
+    password="KochamEmila2506!"
+)
+
+cur = conn.cursor()
+
+cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{TARGET_SCHEMA}";')
+
+# ----------------------------
+# SAVE dim_customers
+# ----------------------------
+
+cur.execute(f'DROP TABLE IF EXISTS "{TARGET_SCHEMA}"."dim_customers";')
+cur.execute(f'''
+    CREATE TABLE "{TARGET_SCHEMA}"."dim_customers" (
+        "customer_key" INT,
+        "customer_id" TEXT,
+        "customer_number" TEXT,
+        "first_name" TEXT,
+        "last_name" TEXT,
+        "country" TEXT,
+        "marital_status" TEXT,
+        "gender" TEXT,
+        "birthdate" DATE,
+        "create_date" DATE
+    );
+''')
+conn.commit()
+
+buffer = io.StringIO()
+dim_customers.to_csv(buffer, index=False, header=False, na_rep="")
+buffer.seek(0)
+
+cur.copy_expert(
+    sql=f'''
+        COPY "{TARGET_SCHEMA}"."dim_customers"
+        ("customer_key", "customer_id", "customer_number", "first_name", "last_name",
+         "country", "marital_status", "gender", "birthdate", "create_date")
+        FROM STDIN WITH CSV
+    ''',
+    file=buffer
+)
+
+conn.commit()
+print("dim_customers loaded")
+
+# ----------------------------
+# SAVE dim_product
+# ----------------------------
+
+cur.execute(f'DROP TABLE IF EXISTS "{TARGET_SCHEMA}"."dim_product";')
+cur.execute(f'''
+    CREATE TABLE "{TARGET_SCHEMA}"."dim_product" (
+        "product_key" INT,
+        "product_number" TEXT,
+        "product_name" TEXT,
+        "cost" NUMERIC,
+        "product_line" TEXT,
+        "start_date" DATE,
+        "end_date" DATE,
+        "category_id" TEXT,
+        "category" TEXT,
+        "subcategory" TEXT,
+        "maintenance" TEXT
+    );
+''')
+conn.commit()
+
+buffer = io.StringIO()
+dim_product.to_csv(buffer, index=False, header=False, na_rep="")
+buffer.seek(0)
+
+cur.copy_expert(
+    sql=f'''
+        COPY "{TARGET_SCHEMA}"."dim_product"
+        ("product_key", "product_number", "product_name", "cost", "product_line",
+         "start_date", "end_date", "category_id", "category", "subcategory", "maintenance")
+        FROM STDIN WITH CSV
+    ''',
+    file=buffer
+)
+
+conn.commit()
+print("dim_product loaded")
+
+# ----------------------------
+# SAVE fact_sales
+# ----------------------------
+
+cur.execute(f'DROP TABLE IF EXISTS "{TARGET_SCHEMA}"."fact_sales";')
+cur.execute(f'''
+    CREATE TABLE "{TARGET_SCHEMA}"."fact_sales" (
+        "order_number" TEXT,
+        "product_key" INT,
+        "customer_key" INT,
+        "order_date" DATE,
+        "ship_date" DATE,
+        "due_date" DATE,
+        "sales_amount" NUMERIC,
+        "quantity" NUMERIC,
+        "price" NUMERIC
+    );
+''')
+conn.commit()
+
+buffer = io.StringIO()
+fact_sales.to_csv(buffer, index=False, header=False, na_rep="")
+buffer.seek(0)
+
+cur.copy_expert(
+    sql=f'''
+        COPY "{TARGET_SCHEMA}"."fact_sales"
+        ("order_number", "product_key", "customer_key", "order_date", "ship_date",
+         "due_date", "sales_amount", "quantity", "price")
+        FROM STDIN WITH CSV
+    ''',
+    file=buffer
+)
+
+conn.commit()
+print("fact_sales loaded")
+
+cur.close()
+conn.close()
+
+print("Curated layer loaded successfully")
