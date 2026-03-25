@@ -7,10 +7,6 @@ TRF_SCHEMA = "transformation"
 RAW_SCHEMA = "ingestion"
 TARGET_SCHEMA = "curated"
 
-# --------------------------------------------------
-# CONNECT + LOAD SOURCE TABLES
-# --------------------------------------------------
-
 conn = psycopg2.connect(
     host="127.0.0.1",
     port="5432",
@@ -30,10 +26,6 @@ conn.close()
 
 print("Source tables loaded")
 
-# --------------------------------------------------
-# NORMALIZE COLUMN NAMES
-# --------------------------------------------------
-
 cust_info.columns = cust_info.columns.str.lower()
 cust_az12.columns = cust_az12.columns.str.lower()
 loc_a101.columns = loc_a101.columns.str.lower()
@@ -41,10 +33,8 @@ prd_info.columns = prd_info.columns.str.lower()
 px_cat_g1v2.columns = px_cat_g1v2.columns.str.lower()
 sales.columns = sales.columns.str.lower()
 
-# --------------------------------------------------
-# CUSTOMER DIMENSION
-# --------------------------------------------------
 
+## Customer
 df_customers = cust_info.merge(
     cust_az12,
     how="left",
@@ -80,10 +70,7 @@ dim_customers.insert(0, "customer_key", dim_customers.index + 1)
 
 print("dim_customers ready")
 
-# --------------------------------------------------
-# PRODUCT DIMENSION
-# --------------------------------------------------
-
+## Product
 df_product = prd_info.merge(
     px_cat_g1v2,
     how="left",
@@ -113,23 +100,18 @@ dim_product.insert(0, "product_key", dim_product.index + 1)
 
 print("dim_product ready")
 
-# --------------------------------------------------
-# FACT SALES
-# --------------------------------------------------
-
+## Fact Sales
 prd_info_current = prd_info[prd_info["prd_end_dt"].isna() | (prd_info["prd_end_dt"] == "")].copy()
 
-prd_info_current["full_prd_key"] = (
-    prd_info_current["prd_category"].astype("string").str.replace("_", "-", regex=False)
-    + "-"
-    + prd_info_current["prd_key"].astype("string")
-)
+prd_info_current = prd_info[
+    prd_info["prd_end_dt"].isna() | (prd_info["prd_end_dt"] == "")
+].copy()
 
 fact_df = sales.merge(
-    prd_info_current[["full_prd_key", "prd_id"]],
+    prd_info_current[["prd_key", "prd_id"]],
     how="left",
     left_on="sls_prd_key",
-    right_on="full_prd_key"
+    right_on="prd_key"
 )
 
 fact_df = fact_df.merge(
@@ -164,10 +146,6 @@ fact_sales["due_date"] = pd.to_datetime(fact_sales["due_date"], errors="coerce")
 
 print("fact_sales ready")
 
-# --------------------------------------------------
-# SAVE TO CURATED LAYER
-# --------------------------------------------------
-
 conn = psycopg2.connect(
     host="127.0.0.1",
     port="5432",
@@ -180,10 +158,7 @@ cur = conn.cursor()
 
 cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{TARGET_SCHEMA}";')
 
-# ----------------------------
-# SAVE dim_customers
-# ----------------------------
-
+## Save dim_customers
 cur.execute(f'DROP TABLE IF EXISTS "{TARGET_SCHEMA}"."dim_customers";')
 cur.execute(f'''
     CREATE TABLE "{TARGET_SCHEMA}"."dim_customers" (
@@ -218,10 +193,7 @@ cur.copy_expert(
 conn.commit()
 print("dim_customers loaded")
 
-# ----------------------------
-# SAVE dim_product
-# ----------------------------
-
+## Save dim_product
 cur.execute(f'DROP TABLE IF EXISTS "{TARGET_SCHEMA}"."dim_product";')
 cur.execute(f'''
     CREATE TABLE "{TARGET_SCHEMA}"."dim_product" (
@@ -257,10 +229,7 @@ cur.copy_expert(
 conn.commit()
 print("dim_product loaded")
 
-# ----------------------------
-# SAVE fact_sales
-# ----------------------------
-
+## Save fact_sales
 cur.execute(f'DROP TABLE IF EXISTS "{TARGET_SCHEMA}"."fact_sales";')
 cur.execute(f'''
     CREATE TABLE "{TARGET_SCHEMA}"."fact_sales" (
