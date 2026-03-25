@@ -130,14 +130,14 @@ fact_df = fact_df.merge(
 
 fact_sales = pd.DataFrame({
     "order_number": fact_df["sls_ord_num"],
-    "product_key": fact_df["product_key"],
-    "customer_key": fact_df["customer_key"],
+    "product_key": pd.to_numeric(fact_df["product_key"], errors="coerce").astype("Int64"),
+    "customer_key": pd.to_numeric(fact_df["customer_key"], errors="coerce").astype("Int64"),
     "order_date": fact_df["sls_order_dt"],
     "ship_date": fact_df["sls_ship_dt"],
     "due_date": fact_df["sls_due_dt"],
-    "sales_amount": pd.to_numeric(fact_df["sls_sales"], errors="coerce"),
-    "quantity": pd.to_numeric(fact_df["sls_quantity"], errors="coerce"),
-    "price": pd.to_numeric(fact_df["sls_price"], errors="coerce")
+    "sales_amount": pd.to_numeric(fact_df["sls_sales"], errors="coerce").astype("Int64"),
+    "quantity": pd.to_numeric(fact_df["sls_quantity"], errors="coerce").astype("Int64"),
+    "price": pd.to_numeric(fact_df["sls_price"], errors="coerce").astype("Int64")
 })
 
 fact_sales["order_date"] = pd.to_datetime(fact_sales["order_date"], errors="coerce")
@@ -241,7 +241,7 @@ cur.execute(f'''
         "due_date" DATE,
         "sales_amount" NUMERIC,
         "quantity" NUMERIC,
-        "price" NUMERIC
+        "price" INTEGER
     );
 ''')
 conn.commit()
